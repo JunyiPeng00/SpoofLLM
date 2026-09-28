@@ -1,0 +1,6 @@
+__pycache__/
+*.pyc
+inference/models/
+inference/smoke/scores.jsonl
+*.egg-info/
+.venv/

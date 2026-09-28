@@ -1,0 +1,10 @@
+# Install a torch build for your accelerator first, for example:
+#   pip install torch==2.6.0 torchaudio==2.6.0 --index-url https://download.pytorch.org/whl/cu124
+# Verified on torch 2.6.0 (CUDA and ROCm 6.2.4), Python 3.12.
+transformers==4.51.*
+peft>=0.14,<0.16
+numpy<2.3
+soundfile
+huggingface_hub>=0.30
+# optional, only for the affine min-Cllr column of eer_from_scores.py
+scikit-learn

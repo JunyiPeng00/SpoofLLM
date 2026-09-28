@@ -1,0 +1,2 @@
+smoke/CON_E_0000368_spoof.wav
+smoke/LA_E_1617471_bonafide.wav
