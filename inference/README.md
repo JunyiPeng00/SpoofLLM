@@ -22,7 +22,8 @@ pip install torch==2.6.0 torchaudio==2.6.0 --index-url https://download.pytorch.
 pip install -r requirements.txt
 ```
 
-Verified on Python 3.12 with torch 2.6.0, transformers 4.51.1 and peft, on both CUDA and ROCm 6.2.4.
+Verified on Python 3.12 with torch 2.6.0 (ROCm 6.2.4), transformers 4.51.1 and peft 0.15.
+The reported results were produced on AMD MI250X. CUDA builds use the same code path.
 
 ## Get the weights
 
@@ -71,8 +72,8 @@ python score_wavs.py \
 
 `--wavs` takes a text file with one path per line, or a directory that is searched recursively for
 `wav`, `flac`, `mp3`, `ogg`, `m4a` and `opus`. Any sample rate works: files are mixed to mono and
-resampled to 16 kHz. About 12 GB of GPU memory at batch size 8. CPU works too, at roughly 110 s to
-load the model and 20 s per file on 16 threads.
+resampled to 16 kHz. Roughly 12 GB of accelerator memory at batch size 8. CPU works too: the smoke test above loads
+the model in about 70 s and scores its two files in about 30 s on 16 threads.
 
 ## Reading the output
 
