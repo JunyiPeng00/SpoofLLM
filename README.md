@@ -1,18 +1,22 @@
 # SpoofLLM
 
-**One prompt-conditioned audio language model that scores an utterance for spoofing and, on the same
-weights, writes out the spoofed time intervals as JSON.** The task instruction selects which.
+[![License](https://img.shields.io/badge/License-Apache%202.0-brightgreen.svg)](LICENSE)
+[![Python](https://img.shields.io/badge/Python-3.12-brightgreen)](https://github.com/JunyiPeng00/SpoofLLM)
 
-Countermeasures are usually trained on the binary bona fide / spoof label, but a trained
+[**Model weights**](https://huggingface.co/JYP2024/SpoofLLM-detector)
+| [**Detection inference**](inference/)
+| [**Results**](#results)
+
+SpoofLLM is a prompt-conditioned audio language model for speech anti-spoofing. One set of weights
+scores an utterance for spoofing and writes out the spoofed time intervals as JSON, with the task
+instruction selecting which.
+
+Countermeasures are normally trained on the binary bona fide / spoof label, but a trained
 countermeasure also emits a continuous score. SpoofLLM regresses those teacher scores alongside the
-label, and that change alone takes macro equal error rate from 6.16 % to 4.89 % across fourteen
-DF-Arena protocols, with a large drop in calibration cost. The same effect holds when the language
-decoder is swapped for a randomly initialized Transformer of matched size, so it is the supervision
-doing the work, not the language model.
-
-Junyi Peng¹, Lichun Fan², Lin Zhang⁴, Oldřich Plchot¹, Themos Stafylakis³, Jian Luan², Jan Černocký¹
-
-¹ Brno University of Technology, Czechia · ² Xiaomi Inc. · ³ Athens University of Economics and Business, Greece · ⁴ Independent Researcher
+label. Across fourteen DF-Arena protocols this lowers macro equal error rate from 6.16 % to 4.89 %
+and cuts calibration cost sharply. Replacing the language decoder with a randomly initialised
+Transformer of matched size moves the numbers the same way, so the gain comes from the supervision
+rather than from the language model.
 
 ### At a glance
 
@@ -232,4 +236,7 @@ fitted on ASVspoof 2019 LA development data: 24,844 utterances, 22,296 spoof and
 }
 ```
 
-Code under Apache-2.0. See [LICENSE](LICENSE) for the checkpoint terms.
+## License
+
+Apache License 2.0 for the code. The checkpoint is released for research use; see
+[LICENSE](LICENSE).
