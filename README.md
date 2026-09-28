@@ -47,6 +47,10 @@ over a learned mixture of all 49 XLS-R-1B hidden states.
 
 Text embeddings are frozen. The encoder is frozen unless fine-tuning is stated.
 
+The acoustic encoder has the XLS-R-1B architecture, but its weights descend from the
+anti-spoofing-adapted encoder inside DF-Arena-1B rather than from the released XLS-R-1B
+checkpoint. All 806 encoder tensors differ from stock XLS-R-1B.
+
 **Supervision.** Alongside the binary label, the student regresses a primary detection target and
 three auxiliary component scores: an artifact score (AASIST + RawNet2-DF), a naturalness score
 (UTMOS with pitch, duration, voicing, jitter and shimmer statistics), and a residual SSL
@@ -223,6 +227,5 @@ that include DF-Arena-1B, whose terms are non-commercial.
 | XLS-R-1B | acoustic encoder architecture | built locally, weights come from the checkpoint | Apache-2.0 |
 | AASIST, RawNet2-DF, UTMOS | artifact and naturalness teacher components | not used | respective upstream licenses |
 
-The released encoder is fine-tuned away from its DF-Arena-1B initialization, and no DF-Arena weight
-or file is read at inference. The non-commercial condition follows from training, not from loading.
-Clear the upstream terms yourself before any commercial use.
+No DF-Arena weight or file is read at inference, so the non-commercial condition follows from
+training rather than from loading. Clear the upstream terms yourself before any commercial use.

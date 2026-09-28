@@ -40,7 +40,8 @@ Two components, about 7 GB:
 
 No pretrained acoustic encoder is downloaded. The checkpoint's 806 encoder tensors are exactly the
 state dict of an XLS-R-1B `Wav2Vec2Model`, so `xlsr_encoder.py` builds the architecture and the
-checkpoint fills every weight.
+checkpoint fills every weight. Those weights are the model's own: they descend from the
+anti-spoofing-adapted encoder of DF-Arena-1B and differ from stock XLS-R-1B in every tensor.
 
 ## Run the smoke test first
 
