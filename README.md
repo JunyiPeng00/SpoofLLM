@@ -1,60 +1,77 @@
 # SpoofLLM
 
-**A prompt-conditioned large audio language model for speech spoof detection and temporal localization.**
+**One prompt-conditioned audio language model that scores an utterance for spoofing and, on the same
+weights, writes out the spoofed time intervals as JSON.** The task instruction selects which.
 
-One instruction-conditioned model produces two outputs: a calibrated utterance-level detection
-score, and the spoofed time intervals of a partially manipulated recording as JSON. The task
-instruction selects which.
+Countermeasures are usually trained on the binary bona fide / spoof label, but a trained
+countermeasure also emits a continuous score. SpoofLLM regresses those teacher scores alongside the
+label, and that change alone takes macro equal error rate from 6.16 % to 4.89 % across fourteen
+DF-Arena protocols, with a large drop in calibration cost. The same effect holds when the language
+decoder is swapped for a randomly initialized Transformer of matched size, so it is the supervision
+doing the work, not the language model.
 
 Junyi Peng¹, Lichun Fan², Lin Zhang⁴, Oldřich Plchot¹, Themos Stafylakis³, Jian Luan², Jan Černocký¹
 
-¹ Brno University of Technology, Czechia  ·  ² Xiaomi Inc.  ·  ³ Athens University of Economics and Business, Greece  ·  ⁴ Independent Researcher
+¹ Brno University of Technology, Czechia · ² Xiaomi Inc. · ³ Athens University of Economics and Business, Greece · ⁴ Independent Researcher
 
----
+### At a glance
 
-## Abstract
+Fourteen DF-Arena detection protocols, unweighted macro. Oracle affine cost is fitted and evaluated
+on each protocol's own trials, so it is a diagnostic bound rather than a deployable calibration.
 
-Speech anti-spoofing requires utterance-level detection and temporal localization of manipulated
-speech. For instruction-conditioned large audio language models (LALMs), we investigate whether
-continuous countermeasure scores improve detection beyond binary labels. We propose SpoofLLM, which
-learns a corpus-dependent primary teacher score and three auxiliary component scores alongside
-binary classification. A dual-stream adapter provides global and frame tokens for detection and
-autoregressive interval generation. Across fourteen DF-Arena protocols, score supervision reduces
-macro equal error rate (EER) from 6.16 % to 4.89 % for the language decoder and from 6.30 % to
-5.10 % for a Transformer mixer approximately matched in trainable backend parameters. Both backends
-also obtain lower raw and oracle affine-calibrated log-likelihood-ratio costs. On the same
-protocols, the released HoliAntiSpoof checkpoint yields 13.47 % macro EER under different training
-conditions. On PartialSpoof, under matched total update budgets, the fine-tuned joint model achieves
-6.37 % balanced segment error, below both single-task configurations (9.11 % with a frozen encoder
-and 10.20 % with encoder fine-tuning). It also achieves 92.36 % segment F1 on the 160 ms grid while
-supporting utterance-level detection.
+| System | Macro EER % ↓ | Raw *C*<sub>llr</sub> ↓ | Oracle affine ↓ |
+|---|---|---|---|
+| **SpoofLLM, fine-tuned encoder — released here** | **4.77** | **0.41** | 0.19 |
+| SpoofLLM, frozen encoder | 4.89 | 0.46 | **0.17** |
+| same model, binary cross-entropy instead of score supervision | 6.16 | 1.36 | 0.22 |
+| DF-Arena-1B | 5.71 | 0.30 | 0.19 |
+| HoliAntiSpoof, released checkpoint re-scored here | 13.47 | 1.81 | 0.41 |
 
----
-
-## Model
+On PartialSpoof the fine-tuned joint model reaches 92.36 % segment F1 on the 160 ms grid while still
+doing utterance-level detection at 5.05 % EER.
 
 ![SpoofLLM architecture](assets/spoofllm_system.png)
 
-**(a)** A task instruction, eight global tokens and `T` frame tokens enter the backend, which emits
-either a detection score or a JSON list of spoofed intervals.
-**(b)** The language backend is Qwen2.5-1.5B-Instruct adapted with LoRA (rank 16, `q/k/v/o`).
-**(c)** A randomly initialized bidirectional Transformer mixer replaces Qwen and LoRA, matched to
-within 1 % of its trainable backend parameters (4.40 M vs 4.36 M), and tests whether the same
-supervision helps a non-language backend.
-**(d)** The dual-stream adapter extends multi-head factorized attention pooling: one set of
-attention weights and values feeds both a pooled global stream and a time-resolved frame stream,
-over a learned mixture of all 49 XLS-R-1B hidden states.
+---
 
-Text embeddings are frozen. The encoder is frozen unless fine-tuning is stated.
+## Quick start
 
-The released checkpoint carries a fine-tuned XLS-R-1B encoder, so its acoustic weights are the
-model's own rather than an off-the-shelf pretrained set.
+```bash
+git clone https://github.com/JunyiPeng00/SpoofLLM && cd SpoofLLM/inference
+pip install torch torchaudio            # pick the build for your CUDA / ROCm
+pip install -r requirements.txt
+python download_weights.py --out models/          # checkpoint + the frozen Qwen base, ~7 GB
 
-**Supervision.** Alongside the binary label, the student regresses a primary detection target and
-three auxiliary component scores: an artifact score (AASIST + RawNet2-DF), a naturalness score
-(UTMOS with pitch, duration, voicing, jitter and shimmer statistics), and a residual SSL
-countermeasure score. All are logistic-calibrated log-odds. At inference the student restores only
-the primary prediction; no teacher and no post-hoc calibrator is involved.
+python score_wavs.py \
+  --ckpt models/merge_a0.5_b0.5_ep3.pt \
+  --llm models/Qwen2.5-1.5B-Instruct \
+  --wavs my_files.txt --out scores.jsonl --device cuda
+```
+
+`--wavs` takes a file list or a directory. Any sample rate; files are mixed to mono and resampled to
+16 kHz. The checkpoint carries the complete fine-tuned XLS-R-1B encoder, so no pretrained acoustic
+model is downloaded and none of the teachers are needed at inference.
+
+A two-file smoke test with reference outputs ships in `inference/smoke/`. Run it first.
+
+### Reading the scores
+
+Each line of `scores.jsonl` carries `spoof_score`: a log-odds on the teacher scale where **positive
+means spoof**. This is the score behind every EER and *C*<sub>llr</sub> below. It is the head output
+restored with the training-pool mean and standard deviation, with no post-hoc calibration.
+
+Two things decide whether you get the reported behaviour:
+
+- **Threshold.** Zero decides at equal priors, but the teacher scale keeps the calibration-set
+  prior. A threshold picked on a small labelled development set from your own domain will do better.
+  The raw-versus-oracle gap in the table above is exactly the cost a per-corpus affine map recovers.
+- **Duration.** The model scores the leading 4.04 s and repeat-pads anything shorter, which is the
+  protocol behind the reported numbers. For longer recordings, cut them into 4 s chunks and
+  aggregate: mean if you expect the whole recording to be manipulated, max if only part of it.
+
+`lr_S1`, `lr_S2`, `lr_S3` are the artifact, naturalness and residual component scores on the same
+scale. `eer_from_scores.py` turns a scored file plus a label list into EER and *C*<sub>llr</sub>.
+Full details in [`inference/README.md`](inference/README.md).
 
 ---
 
@@ -62,9 +79,7 @@ the primary prediction; no teacher and no post-hoc calibrator is involved.
 
 ### Detection: fourteen DF-Arena protocols
 
-Macro columns are unweighted protocol averages. Seen/unseen refer to SpoofLLM's training coverage.
-Oracle affine calibration is fitted and evaluated on each protocol's own evaluation trials, so it is
-a diagnostic bound rather than a deployable calibration. External systems keep their original
+Seen and unseen refer to SpoofLLM's own training coverage. External systems keep their original
 training conditions. Bold marks the best value within each backend.
 
 | System / supervision | 19LA | ASV5 | CFake | LSeVoc | DFADD | **Macro₅** | 21LA | 21DF | ITW | FoR | SONAR | A22T1 | A22T3 | A23R1 | A23R2 | **Macro₉** | **Macro₁₄ ↓** | Raw *C*<sub>llr</sub> ↓ | Oracle affine ↓ |
@@ -81,13 +96,14 @@ training conditions. Bold marks the best value within each backend.
 | *Teachers and external systems* |
 | five-member fusion | 0.10 | 12.71 | 31.45 | 0.56 | 0.13 | 8.99 | 2.43 | 1.33 | 2.82 | 1.46 | 7.93 | 22.51 | 4.11 | 15.31 | 17.90 | 8.42 | 8.62 | 3.71 | 0.27 |
 | DF-Arena-1B | 1.13 | 17.41 | 8.07 | 0.19 | 0.00 | 5.36 | 4.94 | 1.93 | 0.91 | 3.02 | 1.14 | 22.27 | 2.20 | 5.14 | 11.56 | 5.90 | 5.71 | 0.30 | 0.19 |
-| HoliAntiSpoof (released ckpt, re-scored here) | 1.09 | 24.85 | 15.27 | 1.13 | 24.90 | 13.45 | 10.28 | 8.17 | 0.81 | 1.55 | 20.06 | 26.88 | 8.85 | 24.57 | 20.17 | 13.48 | 13.47 | 1.81 | 0.41 |
+| HoliAntiSpoof, re-scored here | 1.09 | 24.85 | 15.27 | 1.13 | 24.90 | 13.45 | 10.28 | 8.17 | 0.81 | 1.55 | 20.06 | 26.88 | 8.85 | 24.57 | 20.17 | 13.48 | 13.47 | 1.81 | 0.41 |
 
 Detection EER in %. Protocols: ASVspoof 2019 LA, ASVspoof 5 Track 1, CodecFake, LibriSeVoc, DFADD,
 ASVspoof 2021 LA, ASVspoof 2021 DF, In-the-Wild, FoR, SONAR, ADD 2022 Track 1 and 3, ADD 2023
 Round 1 and 2.
 
-Both students beat DF-Arena-1B, which supplies their own primary targets on seven training corpora.
+Both students land below DF-Arena-1B, which supplies their own primary targets on seven training
+corpora. The frozen student beats it on ten of the fourteen protocols.
 
 <p align="center"><img src="assets/spoofllm_radar.png" width="560" alt="Per-protocol detection EER"></p>
 
@@ -99,10 +115,14 @@ the boxed value gives that system's EER in %.
 <p align="center"><img src="assets/spoofllm_calibration.png" width="620" alt="Raw and oracle affine-calibrated Cllr"></p>
 
 Score supervision lowers the raw cost far more than the oracle affine cost, so most of what binary
-training loses is scale and offset that a per-corpus affine map could have recovered. The raw-to-
-affine gap falls from 1.14 to 0.29 for the decoder and from 0.75 to 0.30 for the mixer.
+training gives up is scale and offset that a per-corpus affine map could have recovered. The
+raw-to-affine gap falls from 1.14 to 0.29 for the decoder and from 0.75 to 0.30 for the mixer.
 
-### Detection ablations
+Encoder fine-tuning is not free here: it buys the lowest EER and raw cost, but oracle affine cost
+rises from 0.17 to 0.19. If you intend to fit your own calibration, the frozen-encoder system is the
+better base.
+
+### Training window and adapter
 
 Data, seed and optimizer are held fixed. Evaluation always uses full-length audio; only the training
 window varies.
@@ -119,7 +139,7 @@ window varies.
 | random crop | 4.04 s random | 6.68 | 0.63 |
 | **leading window** | **4.04 s** | **5.10** | **0.47** |
 
-Cross-layer aggregation and global tokens both earn their place, and a leading training window beats
+Cross-layer aggregation and global tokens both earn their place. A leading training window beats
 both a longer window and an equal-duration random crop.
 
 ### Localization: PartialSpoof, 160 ms grid
@@ -140,14 +160,15 @@ for generated spans.
 | *Mixer (B), task embedding, score-based readout* |
 | frame head | 6.81 | 6.65 | 7.60 | 9.46 | 89.74 | – |
 
-Single-task reference with a fine-tuned encoder, same grid: CFPRF at 6.20 % segEER and 93.81 % segF1.
+Single-task reference with a fine-tuned encoder on the same grid: CFPRF at 6.20 % segEER and
+93.81 % segF1.
 
 Joint training hurts localization with a frozen encoder and helps it with a fine-tuned one. About
 99.5 % of generated outputs are valid JSON under a strict criterion: the text must parse as a list
 of `{"s", "e"}` objects with finite two-decimal endpoints, positive duration, chronological and
 non-overlapping, and must re-serialize byte-for-byte.
 
-**Example output.** `CON_E_0000368`, PartialSpoof evaluation, 3.09 s.
+`CON_E_0000368`, PartialSpoof evaluation, 3.09 s:
 
 ```
 reference   [{"s":0.32,"e":1.76},{"s":2.24,"e":2.88}]
@@ -158,43 +179,44 @@ The first interval matches; the second ends one 0.16 s grid step late.
 
 ---
 
-## Detection inference
+## Method
 
-The released checkpoint is the fine-tuned-encoder system: **4.77 % macro EER** over the fourteen
-protocols above. See [`inference/`](inference/) for the full instructions.
+### Score supervision
 
-```bash
-cd inference
-pip install torch torchaudio            # pick the build for your CUDA / ROCm
-pip install -r requirements.txt
-python download_weights.py --out models/          # checkpoint + the frozen Qwen base
+Alongside the binary label, the student regresses a primary detection target and three auxiliary
+component scores, all logistic-calibrated log-odds:
 
-python score_wavs.py \
-  --ckpt models/merge_a0.5_b0.5_ep3.pt \
-  --llm models/Qwen2.5-1.5B-Instruct \
-  --wavs my_files.txt --out scores.jsonl --device cuda
-```
+| Target | Source |
+|---|---|
+| primary | corpus-dependent: a five-member fusion for ASVspoof 2019 LA and PartialSpoof, DF-Arena-1B for seven corpora, a WavLM-HP expert for ASVspoof 5 |
+| S₁, artifact | AASIST + RawNet2-DF, two countermeasures without SSL front ends |
+| S₂, naturalness | UTMOS with pitch, duration, voicing, jitter and shimmer statistics |
+| S₃, residual | DF-Arena-1B + XLS-R-AASIST, residualized against S₁ and S₂ and recalibrated |
 
-The checkpoint carries the complete fine-tuned XLS-R-1B encoder, so no pretrained acoustic model is
-downloaded and none of the teachers are needed at inference.
+Corpus identity selects the training-target source only. At inference the student restores the
+primary prediction alone: no teacher, no corpus identity, no post-hoc calibrator.
 
-Each line of `scores.jsonl` carries `spoof_score`, a log-odds on the teacher scale where positive
-means spoof, plus the three component scores and the verdict-head probability. `eer_from_scores.py`
-turns a scored file plus a label list into EER and *C*<sub>llr</sub>.
+The ladder in the detection table separates the two effects. Primary-score regression carries the
+larger share, 6.16 → 5.22, and the three components add 5.22 → 4.89 when tested jointly.
 
-A two-file smoke test with reference outputs ships in `inference/smoke/`. Run it first.
+### Dual-stream adapter
 
----
+Detection needs utterance-level context; localization needs time-indexed features. The adapter
+extends multi-head factorized attention pooling so that one set of attention weights and values
+feeds both: temporal pooling yields eight global tokens, keeping time yields `T` frame tokens. Keys
+and values each take their own learned mixture over all 49 XLS-R-1B hidden states, which is where
+the cross-layer ablation above pays off.
 
-## Training data
+Panel (c) of the figure is the control: a randomly initialized bidirectional Transformer mixer
+replaces Qwen and LoRA, matched to within 1 % of its trainable backend parameters, 4.40 M against
+4.36 M. It moves the same way under score supervision, 6.30 → 5.10.
+
+### Training data
 
 The detection pool holds 4.57 M utterances from ten corpora: SpoofCeleb, CodecFake, MLAAD, DFADD,
 EnvSDD, PartialSpoof, ASVspoof 5, CtrSVDD, LibriSeVoc and ASVspoof 2019 LA. PartialSpoof also
-supplies the official 160 ms segment labels behind both localization outputs.
-
-Teacher fits use ASVspoof 2019 LA development data: 24,844 utterances, 22,296 spoof and 2,548 bona
-fide. Corpus identity selects the training-target source only. Inference uses one student, with no
-teacher and no corpus identity.
+supplies the official 160 ms segment labels behind both localization outputs. Teacher calibration is
+fitted on ASVspoof 2019 LA development data: 24,844 utterances, 22,296 spoof and 2,548 bona fide.
 
 ---
 
@@ -210,21 +232,4 @@ teacher and no corpus identity.
 }
 ```
 
----
-
-## License
-
-Code in this repository is released under Apache-2.0.
-
-The checkpoint is released **for research use only**, because it was trained against teacher scores
-that include DF-Arena-1B, whose terms are non-commercial.
-
-| Component | Role | At inference | Terms |
-|---|---|---|---|
-| DF-Arena-1B | primary teacher score on seven of the ten training corpora, and one of two members of the residual component | not used | non-commercial |
-| Qwen2.5-1.5B-Instruct | frozen language backend | required | Apache-2.0 |
-| XLS-R-1B | acoustic encoder, fine-tuned here | architecture built locally, weights come from the checkpoint | Apache-2.0 |
-| AASIST, RawNet2-DF, UTMOS | artifact and naturalness teacher components | not used | respective upstream licenses |
-
-No DF-Arena weight or file is read at inference, so the non-commercial condition follows from
-training rather than from loading. Clear the upstream terms yourself before any commercial use.
+Code under Apache-2.0. See [LICENSE](LICENSE) for the checkpoint terms.
