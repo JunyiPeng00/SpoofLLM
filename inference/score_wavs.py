@@ -5,13 +5,16 @@ Output per file: fused log-odds on the teacher scale (positive = spoof), the thr
 scores (S1 artifact, S2 naturalness, S3 residual, same scale), the verdict-head probability of spoof,
 and the standardized raw head outputs.
 
-    python score_wavs.py --ckpt models/merge_a0.5_b0.5_ep3.pt --df-arena-dir models/df_arena_1b \
-        --llm models/hf_hub/hub/models--Qwen--Qwen2.5-1.5B-Instruct/snapshots/<hash> \
+    python score_wavs.py --ckpt models/merge_a0.5_b0.5_ep3.pt \
+        --llm models/Qwen2.5-1.5B-Instruct \
         --wavs list.txt            # one path per line (or a directory; wav/flac/mp3/ogg via soundfile)
         --out scores.jsonl [--bs 8] [--device cuda]
 
 Audio handling mirrors evaluation: mono, resampled to 16 kHz, then the model takes the leading
-64,600 samples (4.04 s; shorter files are repeat-padded), the DF-Arena/AASIST convention.
+64,600 samples (4.04 s; shorter files are repeat-padded).
+
+The checkpoint carries the complete XLS-R-1B encoder, so nothing but this file, the checkpoint and
+the frozen Qwen2.5-1.5B-Instruct base is needed.
 """
 from __future__ import annotations
 
@@ -31,10 +34,10 @@ except ImportError:          # fallback: torchaudio backend, then scipy (wav onl
     sf = None
 
 HERE = Path(__file__).resolve().parent
-sys.path.insert(0, str(HERE))            # spoofllm/ package + teacher_smoke.py live next to this file
+sys.path.insert(0, str(HERE))            # spoofllm/ package + xlsr_encoder.py live next to this file
 os.environ.setdefault("HF_HUB_OFFLINE", "1"); os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
 
-from df_arena_loader import load_model as load_df_arena  # noqa: E402
+from xlsr_encoder import build_xlsr_encoder  # noqa: E402
 from spoofllm.student.model import build_qwen_mhfa_student, force_trainable_fp32, load_trainable_state_dict  # noqa: E402
 
 FIELDS = ("lr_S1", "lr_S2", "lr_S3", "fused_log_lr")   # order of the 4-d LLR head
@@ -90,8 +93,7 @@ def list_inputs(spec: str) -> list[Path]:
 
 def main() -> None:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--ckpt", type=Path, required=True)
-    ap.add_argument("--df-arena-dir", type=Path, required=True, help="DF_Arena_1B_V_1 directory (architecture + initial weights)")
+    ap.add_argument("--ckpt", type=Path, required=True, help="SpoofLLM checkpoint (.pt)")
     ap.add_argument("--llm", type=Path, required=True, help="Qwen2.5-1.5B-Instruct snapshot directory")
     ap.add_argument("--wavs", required=True, help="text file with one audio path per line, or a directory")
     ap.add_argument("--out", type=Path, required=True)
@@ -104,16 +106,19 @@ def main() -> None:
     t0 = time.time()
     ckpt = torch.load(args.ckpt, map_location="cpu", weights_only=False)
     scale = ckpt["config"]["llr_scale"]["fields"]          # train-pool mean/std per field
-    df_arena = load_df_arena(args.df_arena_dir)
-    speech_ssl_model = df_arena.backbone.ssl_model
-    df_arena.backbone.ssl_model = torch.nn.Identity(); del df_arena
+    speech_ssl_model = build_xlsr_encoder()      # architecture only; the checkpoint supplies the weights
     model, tok, prefix, suffix, eos_id, pad_id, meta = build_qwen_mhfa_student(
         speech_ssl_model, args.llm, device=device, **build_kwargs_from_ckpt(ckpt, args.attn_implementation))
     force_trainable_fp32(model)
     report = load_trainable_state_dict(model, ckpt["trainable_state_dict"], strict=False)
-    n_enc = sum(1 for k in ckpt["trainable_state_dict"] if k.startswith("speech_ssl_model."))
-    print(f"[load] tensors={len(ckpt['trainable_state_dict'])} (encoder {n_enc}) unexpected={len(report['unexpected'])} "
-          f"missing={len(report['missing'])} in {time.time()-t0:.0f}s", flush=True)
+    state_keys = set(ckpt["trainable_state_dict"])
+    n_enc = sum(1 for k in state_keys if k.startswith("speech_ssl_model."))
+    uncovered = [n for n, _ in model.named_parameters()
+                 if n.startswith("speech_ssl_model.") and n not in state_keys]
+    print(f"[load] tensors={len(state_keys)} (encoder {n_enc}) unexpected={len(report['unexpected'])} "
+          f"encoder_uncovered={len(uncovered)} in {time.time()-t0:.0f}s", flush=True)
+    if uncovered:
+        print(f"[load] WARNING encoder parameters absent from the checkpoint: {uncovered[:5]}", flush=True)
     if report["unexpected"]:
         print("[load] WARNING unexpected keys:", report["unexpected"][:5], flush=True)
     model.eval()

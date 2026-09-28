@@ -164,14 +164,16 @@ protocols above. See [`inference/`](inference/) for the full instructions.
 cd inference
 pip install torch torchaudio            # pick the build for your CUDA / ROCm
 pip install -r requirements.txt
-python download_weights.py --out models/          # pulls the checkpoint from Hugging Face
+python download_weights.py --out models/          # checkpoint + the frozen Qwen base
 
 python score_wavs.py \
   --ckpt models/merge_a0.5_b0.5_ep3.pt \
-  --df-arena-dir models/df_arena_1b \
   --llm models/Qwen2.5-1.5B-Instruct \
   --wavs my_files.txt --out scores.jsonl --device cuda
 ```
+
+The checkpoint carries the complete fine-tuned XLS-R-1B encoder, so no pretrained acoustic model is
+downloaded and none of the teachers are needed at inference.
 
 Each line of `scores.jsonl` carries `spoof_score`, a log-odds on the teacher scale where positive
 means spoof, plus the three component scores and the verdict-head probability. `eer_from_scores.py`
@@ -211,12 +213,16 @@ teacher and no corpus identity.
 
 Code in this repository is released under Apache-2.0.
 
-The checkpoint is released **for research use only**. It builds on components with their own terms:
+The checkpoint is released **for research use only**, because it was trained against teacher scores
+that include DF-Arena-1B, whose terms are non-commercial.
 
-| Component | Role | Terms |
-|---|---|---|
-| DF-Arena-1B | encoder architecture and modeling files; teacher for the primary score on seven corpora | non-commercial, see the model card |
-| Qwen2.5-1.5B-Instruct | frozen language backend | Apache-2.0 |
-| AASIST, RawNet2, UTMOS | auxiliary teacher components | respective upstream licenses |
+| Component | Role | At inference | Terms |
+|---|---|---|---|
+| DF-Arena-1B | primary teacher score on seven of the ten training corpora, one of two members of the residual component, and the initialization of the acoustic encoder | not used | non-commercial |
+| Qwen2.5-1.5B-Instruct | frozen language backend | required | Apache-2.0 |
+| XLS-R-1B | acoustic encoder architecture | built locally, weights come from the checkpoint | Apache-2.0 |
+| AASIST, RawNet2-DF, UTMOS | artifact and naturalness teacher components | not used | respective upstream licenses |
 
-Commercial use requires clearing the upstream terms yourself, DF-Arena-1B in particular.
+The released encoder is fine-tuned away from its DF-Arena-1B initialization, and no DF-Arena weight
+or file is read at inference. The non-commercial condition follows from training, not from loading.
+Clear the upstream terms yourself before any commercial use.

@@ -10,8 +10,8 @@ detection only. Localization is not part of this release.
 |---|---|
 | `score_wavs.py` | the scorer; reads a file list or a directory, writes one JSON line per file |
 | `eer_from_scores.py` | EER and *C*<sub>llr</sub> of a scored file against a label list |
-| `download_weights.py` | pulls the checkpoint, the DF-Arena-1B snapshot and Qwen2.5-1.5B-Instruct |
-| `df_arena_loader.py` | builds the DF-Arena-1B module that supplies the XLS-R-1B encoder |
+| `download_weights.py` | pulls the checkpoint and Qwen2.5-1.5B-Instruct |
+| `xlsr_encoder.py` | builds the bare XLS-R-1B encoder architecture |
 | `spoofllm/student/` | the model: dual-stream MHFA adapter, Qwen + LoRA, the score heads |
 | `smoke/` | two PartialSpoof evaluation files and their reference scores |
 
@@ -22,7 +22,7 @@ pip install torch==2.6.0 torchaudio==2.6.0 --index-url https://download.pytorch.
 pip install -r requirements.txt
 ```
 
-Verified on Python 3.12 with torch 2.6.0 (ROCm 6.2.4), transformers 4.51.1 and peft 0.15.
+Verified on Python 3.12.9 with torch 2.6.0 (ROCm 6.2.4), transformers 4.51.1 and peft 0.15.1.
 The reported results were produced on AMD MI250X. CUDA builds use the same code path.
 
 ## Get the weights
@@ -31,27 +31,28 @@ The reported results were produced on AMD MI250X. CUDA builds use the same code 
 python download_weights.py --out models/
 ```
 
-Three components, about 11 GB:
+Two components, about 7 GB:
 
 - `merge_a0.5_b0.5_ep3.pt` (3.97 GB) — the SpoofLLM checkpoint. Holds the dual-stream adapter, the
-  Qwen LoRA parameters, the score heads, the fine-tuned XLS-R-1B encoder (806 tensors) and the
+  Qwen LoRA parameters, the score heads, the complete fine-tuned XLS-R-1B encoder and the
   training-pool statistics used to restore the score scale.
-- `Speech-Arena-2025/DF_Arena_1B_V_1` — supplies the encoder architecture and its custom
-  Transformers modeling files. Its encoder weights are overwritten by the checkpoint.
 - `Qwen/Qwen2.5-1.5B-Instruct` — the frozen language backend and its tokenizer.
+
+No pretrained acoustic encoder is downloaded. The checkpoint's 806 encoder tensors are exactly the
+state dict of an XLS-R-1B `Wav2Vec2Model`, so `xlsr_encoder.py` builds the architecture and the
+checkpoint fills every weight.
 
 ## Run the smoke test first
 
 ```bash
 python score_wavs.py \
   --ckpt models/merge_a0.5_b0.5_ep3.pt \
-  --df-arena-dir models/df_arena_1b \
   --llm models/Qwen2.5-1.5B-Instruct \
   --wavs smoke/list.txt --out smoke/scores.jsonl --bs 2 --device cpu
 ```
 
-The load report must read `tensors=1082 (encoder 806) unexpected=0 missing=0`. Reference output,
-CPU, `smoke/expected_scores_cpu.jsonl`:
+The load report must read `tensors=1082 (encoder 806) unexpected=0 encoder_uncovered=0`. Reference
+output, CPU, `smoke/expected_scores_cpu.jsonl`:
 
 | file | label | `spoof_score` | `lr_S1` | `lr_S2` | `lr_S3` | `p_spoof_verdict_head` |
 |---|---|---|---|---|---|---|
@@ -65,7 +66,6 @@ A GPU in bf16 moves the second decimal. The signs and the ordering must not move
 ```bash
 python score_wavs.py \
   --ckpt models/merge_a0.5_b0.5_ep3.pt \
-  --df-arena-dir models/df_arena_1b \
   --llm models/Qwen2.5-1.5B-Instruct \
   --wavs my_files.txt --out scores.jsonl --bs 8 --device cuda
 ```
@@ -73,7 +73,7 @@ python score_wavs.py \
 `--wavs` takes a text file with one path per line, or a directory that is searched recursively for
 `wav`, `flac`, `mp3`, `ogg`, `m4a` and `opus`. Any sample rate works: files are mixed to mono and
 resampled to 16 kHz. Roughly 12 GB of accelerator memory at batch size 8. CPU works too: the smoke test above loads
-the model in about 70 s and scores its two files in about 30 s on 16 threads.
+the model in about 16 s and scores its two files in about 26 s on 16 threads.
 
 ## Reading the output
 
